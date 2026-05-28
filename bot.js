@@ -241,6 +241,9 @@ async function startRecording(interaction, voiceChannel, meetingType, channel) {
     return;
   }
 
+  // 먼저 3초 타임아웃 방지
+  await interaction.deferUpdate();
+
   const connection = joinVoiceChannel({
     channelId: voiceChannel.id,
     guildId,
@@ -252,7 +255,7 @@ async function startRecording(interaction, voiceChannel, meetingType, channel) {
     await entersState(connection, VoiceConnectionStatus.Ready, 10_000);
   } catch (e) {
     connection.destroy();
-    await interaction.reply({ content: '❌ 음성 채널 연결 실패! 다시 시도해주세요.', ephemeral: true });
+    await interaction.editReply({ content: '❌ 음성 채널 연결 실패! 다시 시도해주세요.', components: [] });
     return;
   }
 
@@ -264,7 +267,7 @@ async function startRecording(interaction, voiceChannel, meetingType, channel) {
 
   recordingSessions.set(guildId, { connection, pcmWriteStream, pcmPath, meetingType, participants, channel });
 
-  await interaction.update({
+  await interaction.editReply({
     content: `🔴 **${meetingType.name} 녹음 시작!**\n참여자: ${participants.join(', ')}\n종료: \`!종료\``,
     components: [],
   });
