@@ -1,5 +1,3 @@
-process.env.NODE_PATH = '/home/container/node_modules';
-require('module').Module._initPaths();
 const { Client, GatewayIntentBits, Events } = require('discord.js');
 const {
   joinVoiceChannel,
@@ -46,7 +44,6 @@ const pendingMinutes = new Map();
 
 // ─── VITO API ──────────────────────────────────────────────
 
-// VITO 액세스 토큰 발급
 async function getVitoToken() {
   const res = await axios.post(
     'https://openapi.vito.ai/v1/authenticate',
@@ -59,7 +56,6 @@ async function getVitoToken() {
   return res.data.access_token;
 }
 
-// VITO STT 요청 → transcribe_id 반환
 async function submitVitoTranscribe(wavPath, token) {
   const FormData = require('form-data');
   const form = new FormData();
@@ -68,21 +64,14 @@ async function submitVitoTranscribe(wavPath, token) {
     diarization: { use_verification: false },
     use_multi_channel: false,
   }));
-
   const res = await axios.post(
     'https://openapi.vito.ai/v1/transcribe',
     form,
-    {
-      headers: {
-        ...form.getHeaders(),
-        Authorization: `Bearer ${token}`,
-      },
-    }
+    { headers: { ...form.getHeaders(), Authorization: `Bearer ${token}` } }
   );
   return res.data.id;
 }
 
-// VITO 결과 폴링 (완료될 때까지 대기)
 async function pollVitoResult(transcribeId, token) {
   const url = `https://openapi.vito.ai/v1/transcribe/${transcribeId}`;
   while (true) {
@@ -90,25 +79,21 @@ async function pollVitoResult(transcribeId, token) {
       headers: { Authorization: `Bearer ${token}` },
     });
     const { status, results } = res.data;
-    if (status === 'completed') {
-      return results.utterances
-        .map(u => u.msg)
-        .join(' ');
-    }
+    if (status === 'completed') return results.utterances.map(u => u.msg).join(' ');
     if (status === 'failed') throw new Error('VITO 변환 실패');
     await new Promise(r => setTimeout(r, 3000));
   }
 }
 
-// PCM → WAV 변환 (ffmpeg)
-function pcmToWav(pcmBuffer, outputPath) {
+// ─── PCM 파일 → WAV → VITO ────────────────────────────────
+
+// PCM 파일을 WAV로 변환 (ffmpeg)
+function pcmFileToWav(pcmPath, wavPath) {
   return new Promise((resolve, reject) => {
     const ffmpeg = spawn('ffmpeg', [
       '-f', 's16le', '-ar', '48000', '-ac', '2',
-      '-i', 'pipe:0', '-y', outputPath,
+      '-i', pcmPath, '-y', wavPath,
     ]);
-    ffmpeg.stdin.write(pcmBuffer);
-    ffmpeg.stdin.end();
     ffmpeg.on('close', code => {
       if (code === 0) resolve();
       else reject(new Error(`ffmpeg 종료 코드: ${code}`));
@@ -116,19 +101,14 @@ function pcmToWav(pcmBuffer, outputPath) {
   });
 }
 
-// 녹음 → VITO STT 전체 흐름
-async function transcribeWithVito(pcmChunks) {
+async function transcribeWithVito(pcmPath) {
   const ts = Date.now();
   const wavPath = `/tmp/meeting_${ts}.wav`;
-
   try {
-    const combined = Buffer.concat(pcmChunks);
-    await pcmToWav(combined, wavPath);
-
+    await pcmFileToWav(pcmPath, wavPath);
     const token = await getVitoToken();
     const transcribeId = await submitVitoTranscribe(wavPath, token);
-    const transcript = await pollVitoResult(transcribeId, token);
-    return transcript;
+    return await pollVitoResult(transcribeId, token);
   } finally {
     try { fs.unlinkSync(wavPath); } catch {}
   }
@@ -175,14 +155,12 @@ async function uploadToConfluence(title, content, parentId) {
   const auth = Buffer.from(`${CONFLUENCE_EMAIL}:${CONFLUENCE_API_TOKEN}`).toString('base64');
   const headers = { Authorization: `Basic ${auth}`, 'Content-Type': 'application/json' };
   const htmlContent = markdownToConfluence(content);
-
   const existing = await findExistingPage(title);
   if (existing) {
     const now = new Date();
     const timeStr = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
     title = `${title} (${timeStr})`;
   }
-
   const res = await axios.post(
     `${CONFLUENCE_URL}/wiki/rest/api/content`,
     {
@@ -193,9 +171,7 @@ async function uploadToConfluence(title, content, parentId) {
     },
     { headers }
   );
-  return res.data._links?.webui
-    ? `${CONFLUENCE_URL}/wiki${res.data._links.webui}`
-    : CONFLUENCE_URL;
+  return res.data._links?.webui ? `${CONFLUENCE_URL}/wiki${res.data._links.webui}` : CONFLUENCE_URL;
 }
 
 // ─── Claude 회의록 생성 ────────────────────────────────────
@@ -204,7 +180,6 @@ async function generateMinutes(transcript, participants, meetingType) {
   const now = new Date();
   const today = `${now.getFullYear()}년 ${String(now.getMonth()+1).padStart(2,'0')}월 ${String(now.getDate()).padStart(2,'0')}일`;
   const todayTitle = now.toISOString().slice(0, 10);
-
   const res = await anthropic.messages.create({
     model: 'claude-sonnet-4-6',
     max_tokens: 2000,
@@ -237,41 +212,38 @@ async function finishAndUpload(channel, minutes, todayTitle, meetingType) {
 
 // ─── 녹음 처리 ─────────────────────────────────────────────
 
-async function processRecording(channel, userStreams, participants, meetingType) {
+async function processRecording(channel, pcmPath, participants, meetingType) {
   await channel.send('🎙️ 음성을 텍스트로 변환 중... (VITO STT)');
 
-  const allChunks = Object.values(userStreams).flat();
-  if (allChunks.length === 0) {
+  if (!fs.existsSync(pcmPath) || fs.statSync(pcmPath).size === 0) {
     await channel.send('⚠️ 녹음된 데이터가 없어요.');
+    try { fs.unlinkSync(pcmPath); } catch {}
     return;
   }
 
   try {
-    const transcript = await transcribeWithVito(allChunks);
-
+    const transcript = await transcribeWithVito(pcmPath);
     if (!transcript.trim()) {
       await channel.send('⚠️ 음성 변환 결과가 없어요.');
       return;
     }
-
     await channel.send(`✅ 변환 완료!\n\`\`\`\n${transcript.slice(0, 300)}${transcript.length > 300 ? '...' : ''}\n\`\`\``);
     await channel.send('📝 회의록 생성 중...');
-
     const { minutes, todayTitle } = await generateMinutes(transcript, participants.join(', '), meetingType);
     await finishAndUpload(channel, minutes, todayTitle, meetingType);
-
   } catch (e) {
     console.error('처리 오류:', e.message);
     await channel.send(`⚠️ 처리 중 오류가 발생했어요: ${e.message}`);
+  } finally {
+    try { fs.unlinkSync(pcmPath); } catch {}
   }
 }
 
-// ─── 유저 스트림 구독 ──────────────────────────────────────
+// ─── 유저 스트림 구독 (파일에 바로 write) ─────────────────
 
-function subscribeUser(receiver, userId, userStreams) {
+function subscribeUser(receiver, userId, pcmWriteStream, userStreams) {
   if (userStreams.subscribed.has(userId)) return;
   userStreams.subscribed.add(userId);
-  if (!userStreams.chunks[userId]) userStreams.chunks[userId] = [];
 
   const opusStream = receiver.subscribe(userId, {
     end: { behavior: EndBehaviorType.AfterSilence, duration: 2000 },
@@ -279,7 +251,8 @@ function subscribeUser(receiver, userId, userStreams) {
   const decoder = new prism.opus.Decoder({ rate: 48000, channels: 2, frameSize: 960 });
   opusStream.pipe(decoder);
 
-  decoder.on('data', chunk => userStreams.chunks[userId].push(chunk));
+  // 메모리에 쌓지 않고 바로 파일에 씀
+  decoder.on('data', chunk => pcmWriteStream.write(chunk));
   decoder.on('end', () => userStreams.subscribed.delete(userId));
   decoder.on('error', e => console.error('Decoder 오류:', e.message));
 }
@@ -294,7 +267,6 @@ client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;
   const channelId = message.channelId;
 
-  // 회의 유형 선택 대기
   if (pendingMinutes.has(channelId)) {
     if (MEETING_TYPES[message.content]) {
       const meetingType = MEETING_TYPES[message.content];
@@ -312,7 +284,6 @@ client.on(Events.MessageCreate, async (message) => {
     }
   }
 
-  // !시작
   if (message.content.startsWith('!시작')) {
     if (!message.member?.voice?.channel) {
       await message.channel.send('❌ 먼저 음성 채널에 들어가 주세요!');
@@ -338,17 +309,21 @@ client.on(Events.MessageCreate, async (message) => {
       adapterCreator: message.guild.voiceAdapterCreator,
       selfDeaf: false,
     });
-
     await entersState(connection, VoiceConnectionStatus.Ready, 10_000);
 
-    const userStreams = { subscribed: new Set(), chunks: {} };
+    // 녹음 데이터를 파일에 바로 write
+    const pcmPath = `/tmp/meeting_${Date.now()}.pcm`;
+    const pcmWriteStream = fs.createWriteStream(pcmPath);
+    const userStreams = { subscribed: new Set() };
     const receiver = connection.receiver;
-    receiver.speaking.on('start', userId => subscribeUser(receiver, userId, userStreams));
+    receiver.speaking.on('start', userId => subscribeUser(receiver, userId, pcmWriteStream, userStreams));
 
-    recordingSessions.set(message.guildId, { connection, userStreams, meetingType, participants, channel: message.channel });
+    recordingSessions.set(message.guildId, {
+      connection, pcmWriteStream, pcmPath,
+      meetingType, participants, channel: message.channel
+    });
     await message.channel.send(`🔴 **${meetingType.name} 녹음 시작!**\n참여자: ${participants.join(', ')}\n종료: \`!종료\``);
 
-  // !종료
   } else if (message.content === '!종료') {
     if (!recordingSessions.has(message.guildId)) {
       await message.channel.send('❌ 진행 중인 녹음이 없어요!');
@@ -360,10 +335,12 @@ client.on(Events.MessageCreate, async (message) => {
     await new Promise(resolve => setTimeout(resolve, 2000));
     session.connection.destroy();
 
-    await message.channel.send('⏹️ 녹음 종료! 처리 중...');
-    await processRecording(session.channel, session.userStreams.chunks, session.participants, session.meetingType);
+    // 파일 스트림 닫고 처리
+    session.pcmWriteStream.end(() => {
+      message.channel.send('⏹️ 녹음 종료! 처리 중...');
+      processRecording(session.channel, session.pcmPath, session.participants, session.meetingType);
+    });
 
-  // !회의록
   } else if (message.content.startsWith('!회의록')) {
     const content = message.content.replace('!회의록', '').trim();
     if (!content) {
@@ -377,7 +354,6 @@ client.on(Events.MessageCreate, async (message) => {
     pendingMinutes.set(channelId, { content, participants });
     await message.channel.send('📂 **어떤 회의인가요?**\n\n`1` — 주간 회의\n`2` — iOS 회의록\n`3` — 외부 미팅\n`4` — 마일스톤 회고\n\n취소: `!취소`');
 
-  // !도움말
   } else if (message.content === '!도움말') {
     await message.channel.send('📋 **회의록 봇 사용법**\n\n**🎙️ 음성 녹음 방식**\n`!시작 1~4` — 음성 채널 녹음 시작\n`!종료` — 녹음 종료 → VITO STT → 회의록 → Confluence\n\n**📝 텍스트 입력 방식**\n`!회의록 [내용]` — 텍스트로 회의록 생성\n\n**유형**\n`1` 주간 | `2` iOS | `3` 외부 | `4` 회고');
   }
