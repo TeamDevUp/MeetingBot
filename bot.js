@@ -252,7 +252,7 @@ async function startRecording(interaction, voiceChannel, meetingType, channel) {
   });
 
   try {
-    await entersState(connection, VoiceConnectionStatus.Ready, 10_000);
+    await entersState(connection, VoiceConnectionStatus.Ready, 30_000);
   } catch (e) {
     connection.destroy();
     await interaction.editReply({ content: '❌ 음성 채널 연결 실패! 다시 시도해주세요.', components: [] });
