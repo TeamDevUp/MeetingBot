@@ -1,9 +1,7 @@
 const { Client, GatewayIntentBits, Events, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const {
   joinVoiceChannel,
-  VoiceConnectionStatus,
   EndBehaviorType,
-  entersState,
 } = require('@discordjs/voice');
 const prism = require('prism-media');
 const fs = require('fs');
@@ -48,22 +46,15 @@ const pendingMinutes = new Map();
 process.on('unhandledRejection', e => console.error('Unhandled rejection:', e));
 process.on('uncaughtException', e => console.error('Uncaught exception:', e));
 
-// ─── 버튼 UI (한 줄에 하나, 모두 같은 색) ─────────────────
+// ─── 버튼 UI ───────────────────────────────────────────────
 
 function buildMeetingButtons() {
-  const row1 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('meeting_weekly').setLabel('🗓 주간 회의').setStyle(ButtonStyle.Secondary),
-  );
-  const row2 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('meeting_ios').setLabel('📱 iOS 회의록').setStyle(ButtonStyle.Secondary),
-  );
-  const row3 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('meeting_external').setLabel('🤝 외부 미팅').setStyle(ButtonStyle.Secondary),
-  );
-  const row4 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('meeting_milestone').setLabel('🏁 마일스톤 회고').setStyle(ButtonStyle.Secondary),
-  );
-  return [row1, row2, row3, row4];
+  return [
+    new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('meeting_weekly').setLabel('🗓 주간 회의').setStyle(ButtonStyle.Secondary)),
+    new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('meeting_ios').setLabel('📱 iOS 회의록').setStyle(ButtonStyle.Secondary)),
+    new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('meeting_external').setLabel('🤝 외부 미팅').setStyle(ButtonStyle.Secondary)),
+    new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('meeting_milestone').setLabel('🏁 마일스톤 회고').setStyle(ButtonStyle.Secondary)),
+  ];
 }
 
 // ─── VITO API ──────────────────────────────────────────────
@@ -240,7 +231,7 @@ function subscribeUser(receiver, userId, pcmWriteStream, userStreams) {
   decoder.on('error', e => console.error('Decoder 오류:', e.message));
 }
 
-// ─── 녹음 시작 공통 함수 ───────────────────────────────────
+// ─── 녹음 시작 공통 함수 (entersState 제거) ───────────────
 
 async function startRecording(interaction, voiceChannel, meetingType, channel) {
   const participants = voiceChannel.members.map(m => m.displayName);
@@ -259,14 +250,6 @@ async function startRecording(interaction, voiceChannel, meetingType, channel) {
     adapterCreator: voiceChannel.guild.voiceAdapterCreator,
     selfDeaf: false,
   });
-
-  try {
-    await entersState(connection, VoiceConnectionStatus.Ready, 30_000);
-  } catch (e) {
-    connection.destroy();
-    await interaction.editReply({ content: '❌ 음성 채널 연결 실패! 다시 시도해주세요.', components: [] });
-    return;
-  }
 
   const pcmPath = `/tmp/meeting_${Date.now()}.pcm`;
   const pcmWriteStream = fs.createWriteStream(pcmPath);
