@@ -1,3 +1,5 @@
+process.env.NODE_PATH = '/home/container/node_modules';
+require('module').Module._initPaths();
 const { Client, GatewayIntentBits, Events } = require('discord.js');
 const {
   joinVoiceChannel,

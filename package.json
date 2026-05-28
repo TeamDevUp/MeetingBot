@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "main": "bot.js",
   "scripts": {
-    "start": "node bot.js"
+    "start": "NODE_PATH=/home/container/node_modules node bot.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.24.0",
