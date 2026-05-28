@@ -1,5 +1,3 @@
-const http = require('http');
-http.createServer((req, res) => res.end('OK')).listen(process.env.PORT || 3000);
 const { Client, GatewayIntentBits, Events, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const {
   joinVoiceChannel,
@@ -10,9 +8,13 @@ const {
 const prism = require('prism-media');
 const fs = require('fs');
 const { spawn } = require('child_process');
+const http = require('http');
 const Anthropic = require('@anthropic-ai/sdk');
 const axios = require('axios');
 require('dotenv').config();
+
+// 헬스체크 서버 (Render 슬립 방지)
+http.createServer((req, res) => res.end('OK')).listen(process.env.PORT || 3000);
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
@@ -46,16 +48,22 @@ const pendingMinutes = new Map();
 process.on('unhandledRejection', e => console.error('Unhandled rejection:', e));
 process.on('uncaughtException', e => console.error('Uncaught exception:', e));
 
-// ─── 버튼 UI ───────────────────────────────────────────────
+// ─── 버튼 UI (한 줄에 하나, 모두 같은 색) ─────────────────
 
 function buildMeetingButtons() {
-  const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('meeting_weekly')   .setLabel('주간 회의')     .setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('meeting_ios')      .setLabel('iOS 회의록')   .setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('meeting_external') .setLabel('외부 미팅')    .setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('meeting_milestone').setLabel('마일스톤 회고').setStyle(ButtonStyle.Secondary),
+  const row1 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('meeting_weekly').setLabel('🗓 주간 회의').setStyle(ButtonStyle.Secondary),
   );
-  return row;
+  const row2 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('meeting_ios').setLabel('📱 iOS 회의록').setStyle(ButtonStyle.Secondary),
+  );
+  const row3 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('meeting_external').setLabel('🤝 외부 미팅').setStyle(ButtonStyle.Secondary),
+  );
+  const row4 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('meeting_milestone').setLabel('🏁 마일스톤 회고').setStyle(ButtonStyle.Secondary),
+  );
+  return [row1, row2, row3, row4];
 }
 
 // ─── VITO API ──────────────────────────────────────────────
@@ -243,7 +251,6 @@ async function startRecording(interaction, voiceChannel, meetingType, channel) {
     return;
   }
 
-  // 먼저 3초 타임아웃 방지
   await interaction.deferUpdate();
 
   const connection = joinVoiceChannel({
@@ -281,7 +288,6 @@ client.once(Events.ClientReady, () => {
   console.log(`✅ ${client.user.tag} 봇 시작됨!`);
 });
 
-// 버튼 클릭 처리
 client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isButton()) return;
   if (!interaction.customId.startsWith('meeting_')) return;
@@ -303,7 +309,6 @@ client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;
   const channelId = message.channelId;
 
-  // 회의 유형 선택 대기 (텍스트 방식 !회의록용)
   if (pendingMinutes.has(channelId)) {
     const key = { '1': 'weekly', '2': 'ios', '3': 'external', '4': 'milestone' }[message.content];
     if (key) {
@@ -322,7 +327,6 @@ client.on(Events.MessageCreate, async (message) => {
     }
   }
 
-  // !시작 → 버튼 표시
   if (message.content === '!시작') {
     if (!message.member?.voice?.channel) {
       await message.channel.send('❌ 먼저 음성 채널에 들어가 주세요!');
@@ -334,10 +338,9 @@ client.on(Events.MessageCreate, async (message) => {
     }
     await message.channel.send({
       content: '📂 **어떤 회의를 시작할까요?**',
-      components: [buildMeetingButtons()],
+      components: buildMeetingButtons(),
     });
 
-  // !종료
   } else if (message.content === '!종료') {
     if (!recordingSessions.has(message.guildId)) {
       await message.channel.send('❌ 진행 중인 녹음이 없어요!');
@@ -352,7 +355,6 @@ client.on(Events.MessageCreate, async (message) => {
       processRecording(session.channel, session.pcmPath, session.participants, session.meetingType);
     });
 
-  // !회의록
   } else if (message.content.startsWith('!회의록')) {
     const content = message.content.replace('!회의록', '').trim();
     if (!content) {
@@ -366,10 +368,9 @@ client.on(Events.MessageCreate, async (message) => {
     pendingMinutes.set(channelId, { content, participants });
     await message.channel.send({
       content: '📂 **어떤 회의인가요?**',
-      components: [buildMeetingButtons()],
+      components: buildMeetingButtons(),
     });
 
-  // !도움말
   } else if (message.content === '!도움말') {
     await message.channel.send('📋 **회의록 봇 사용법**\n\n**🎙️ 음성 녹음 방식**\n`!시작` — 버튼으로 회의 유형 선택 후 녹음 시작\n`!종료` — 녹음 종료 → VITO STT → 회의록 → Confluence\n\n**📝 텍스트 입력 방식**\n`!회의록 [내용]` — 텍스트로 회의록 생성');
   }
