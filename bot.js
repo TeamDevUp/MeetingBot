@@ -2,17 +2,15 @@ const { Client, GatewayIntentBits, Events, ActionRowBuilder, ButtonBuilder, Butt
 const {
   joinVoiceChannel,
   EndBehaviorType,
+  VoiceConnectionStatus,
 } = require('@discordjs/voice');
 const prism = require('prism-media');
 const fs = require('fs');
 const { spawn } = require('child_process');
-const http = require('http');
 const Anthropic = require('@anthropic-ai/sdk');
 const axios = require('axios');
-require('dotenv').config();
+require('dotenv').config({ path: require('path').join(__dirname, '.env'), override: true });
 
-// 헬스체크 서버 (Render 슬립 방지)
-http.createServer((req, res) => res.end('OK')).listen(process.env.PORT || 3000);
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
@@ -72,7 +70,7 @@ async function submitVitoTranscribe(wavPath, token) {
   const FormData = require('form-data');
   const form = new FormData();
   form.append('file', fs.createReadStream(wavPath));
-  form.append('config', JSON.stringify({ diarization: { use_verification: false }, use_multi_channel: false }));
+  form.append('config', JSON.stringify({ use_multi_channel: false }));
   const res = await axios.post('https://openapi.vito.ai/v1/transcribe', form, {
     headers: { ...form.getHeaders(), Authorization: `Bearer ${token}` },
   });
@@ -81,18 +79,20 @@ async function submitVitoTranscribe(wavPath, token) {
 
 async function pollVitoResult(transcribeId, token) {
   const url = `https://openapi.vito.ai/v1/transcribe/${transcribeId}`;
-  while (true) {
+  const deadline = Date.now() + 30 * 60 * 1000; // 30분 타임아웃
+  while (Date.now() < deadline) {
     const res = await axios.get(url, { headers: { Authorization: `Bearer ${token}` } });
     const { status, results } = res.data;
     if (status === 'completed') return results.utterances.map(u => u.msg).join(' ');
     if (status === 'failed') throw new Error('VITO 변환 실패');
     await new Promise(r => setTimeout(r, 3000));
   }
+  throw new Error('VITO 변환 타임아웃 (30분 초과)');
 }
 
 function pcmFileToWav(pcmPath, wavPath) {
   return new Promise((resolve, reject) => {
-    const ffmpeg = spawn('ffmpeg', ['-f', 's16le', '-ar', '48000', '-ac', '2', '-i', pcmPath, '-y', wavPath]);
+    const ffmpeg = spawn('ffmpeg', ['-f', 's16le', '-ar', '48000', '-ac', '2', '-i', pcmPath, '-ar', '16000', '-ac', '1', '-y', wavPath]);
     ffmpeg.on('close', code => code === 0 ? resolve() : reject(new Error(`ffmpeg 오류: ${code}`)));
   });
 }
@@ -171,7 +171,7 @@ async function generateMinutes(transcript, participants, meetingType) {
   const todayTitle = now.toISOString().slice(0, 10);
   const res = await anthropic.messages.create({
     model: 'claude-sonnet-4-6',
-    max_tokens: 2000,
+    max_tokens: 8000,
     messages: [{ role: 'user', content: `다음은 오늘(${today}) ${meetingType.name} 내용입니다.\n참여자: ${participants}\n\n[회의 내용]\n${transcript}\n\n위 내용을 바탕으로 아래 형식에 맞게 회의록을 작성해주세요. 형식을 절대 변경하지 마세요.\n\n# ${todayTitle} 회의록\n\n## 날짜\n${today}\n\n## 참여자\n${participants || '[확인 필요]'}\n\n## 목표\n(회의 목표를 한 줄로 요약)\n\n## 자료\n(회의에서 언급된 링크나 자료. 없으면 -)\n\n## 토론 주제\n| 시간 | 토픽 | 발표자 | 비고 |\n|------|------|--------|------|\n(각 토론 주제별로 한 행씩. 비고에 주요 내용, 질답, 결정사항 상세 기록)\n\n## 조치 항목\n| 담당자 | 내용 | 기한 |\n|--------|------|------|\n\n## 결정 사항\n(최종 결정된 내용)\n\n## 관련 정보\n(참고 링크, 문서 등. 없으면 -)\n\n불명확한 부분은 [확인 필요]로 표시해주세요.` }],
   });
   return { minutes: res.content[0].text, todayTitle };
@@ -211,7 +211,8 @@ async function processRecording(channel, pcmPath, participants, meetingType) {
     const { minutes, todayTitle } = await generateMinutes(transcript, participants.join(', '), meetingType);
     await finishAndUpload(channel, minutes, todayTitle, meetingType);
   } catch (e) {
-    console.error('처리 오류:', e.message);
+    const detail = e.response?.data ? JSON.stringify(e.response.data) : e.message;
+    console.error('처리 오류:', detail);
     await channel.send(`⚠️ 처리 중 오류가 발생했어요: ${e.message}`);
   } finally {
     try { fs.unlinkSync(pcmPath); } catch {}
@@ -225,8 +226,9 @@ function subscribeUser(receiver, userId, pcmWriteStream, userStreams) {
   userStreams.subscribed.add(userId);
   const opusStream = receiver.subscribe(userId, { end: { behavior: EndBehaviorType.AfterSilence, duration: 2000 } });
   const decoder = new prism.opus.Decoder({ rate: 48000, channels: 2, frameSize: 960 });
+  opusStream.on('error', e => console.error('OpusStream 오류:', e.message));
   opusStream.pipe(decoder);
-  decoder.on('data', chunk => pcmWriteStream.write(chunk));
+  decoder.on('data', chunk => { if (!pcmWriteStream.destroyed) pcmWriteStream.write(chunk); });
   decoder.on('end', () => userStreams.subscribed.delete(userId));
   decoder.on('error', e => console.error('Decoder 오류:', e.message));
 }
@@ -253,9 +255,24 @@ async function startRecording(interaction, voiceChannel, meetingType, channel) {
 
   const pcmPath = `/tmp/meeting_${Date.now()}.pcm`;
   const pcmWriteStream = fs.createWriteStream(pcmPath);
+  pcmWriteStream.on('error', e => console.error('PCM 파일 쓰기 오류:', e.message));
   const userStreams = { subscribed: new Set() };
-  const receiver = connection.receiver;
-  receiver.speaking.on('start', userId => subscribeUser(receiver, userId, pcmWriteStream, userStreams));
+
+  connection.on('error', e => console.error('[Voice] 커넥션 오류:', e.message));
+
+  const setupReceiver = () => {
+    const receiver = connection.receiver;
+    voiceChannel.members.forEach(m => {
+      if (!m.user.bot) subscribeUser(receiver, m.id, pcmWriteStream, userStreams);
+    });
+    receiver.speaking.on('start', userId => subscribeUser(receiver, userId, pcmWriteStream, userStreams));
+  };
+
+  if (connection.state.status === VoiceConnectionStatus.Ready) {
+    setupReceiver();
+  } else {
+    connection.on(VoiceConnectionStatus.Ready, setupReceiver);
+  }
 
   recordingSessions.set(guildId, { connection, pcmWriteStream, pcmPath, meetingType, participants, channel });
 
