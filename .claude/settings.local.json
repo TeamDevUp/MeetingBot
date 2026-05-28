@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pm2 list:*)",
+      "Bash(pm2 restart:*)",
+      "Bash(pm2 logs:*)",
+      "Bash(node:*)",
+      "Bash(node -e \"console.log\\(require\\(''./node_modules/ws/package.json''\\).version\\)\")",
+      "Bash(npm show:*)",
+      "Bash(npm install:*)",
+      "Bash(pm2 describe:*)",
+      "Bash(grep -v grep node --version tail -15 /Users/junyoung/.pm2/logs/meeting-bot-out.log tail -5 /Users/junyoung/.pm2/logs/meeting-bot-error.log)",
+      "Bash(npm uninstall:*)",
+      "Bash(git push:*)",
+      "Bash(git reset:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git filter-repo:*)",
+      "Bash(pip3 install:*)",
+      "Bash(brew install:*)",
+      "Bash(git remote:*)",
+      "Bash(pm2 show:*)",
+      "Bash(pm2 status:*)",
+      "Bash(grep -v \"^$\")"
+    ]
+  }
+}

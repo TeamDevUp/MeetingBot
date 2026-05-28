@@ -259,15 +259,26 @@ async function startRecording(interaction, voiceChannel, meetingType, channel) {
   const userStreams = { subscribed: new Set() };
 
   connection.on('error', e => console.error('[Voice] 커넥션 오류:', e.message));
+  connection.on('stateChange', (oldState, newState) => {
+    console.log('[DEBUG] 상태 변경:', oldState.status, '->', newState.status);
+  });
 
   const setupReceiver = () => {
+    console.log('[DEBUG] setupReceiver 호출됨, 채널 멤버 수:', voiceChannel.members.size);
     const receiver = connection.receiver;
     voiceChannel.members.forEach(m => {
-      if (!m.user.bot) subscribeUser(receiver, m.id, pcmWriteStream, userStreams);
+      if (!m.user.bot) {
+        console.log('[DEBUG] 멤버 구독:', m.displayName);
+        subscribeUser(receiver, m.id, pcmWriteStream, userStreams);
+      }
     });
-    receiver.speaking.on('start', userId => subscribeUser(receiver, userId, pcmWriteStream, userStreams));
+    receiver.speaking.on('start', userId => {
+      console.log('[DEBUG] speaking start:', userId);
+      subscribeUser(receiver, userId, pcmWriteStream, userStreams);
+    });
   };
 
+  console.log('[DEBUG] 연결 상태:', connection.state.status);
   if (connection.state.status === VoiceConnectionStatus.Ready) {
     setupReceiver();
   } else {
