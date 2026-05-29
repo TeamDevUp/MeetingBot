@@ -172,7 +172,7 @@ async function generateMinutes(transcript, participants, meetingType) {
   const res = await anthropic.messages.create({
     model: 'claude-sonnet-4-6',
     max_tokens: 8000,
-    messages: [{ role: 'user', content: `다음은 오늘(${today}) ${meetingType.name} 내용입니다.\n참여자: ${participants}\n\n[회의 내용]\n${transcript}\n\n위 내용을 바탕으로 아래 형식에 맞게 회의록을 작성해주세요. 형식을 절대 변경하지 마세요.\n\n# ${todayTitle} 회의록\n\n## 날짜\n${today}\n\n## 참여자\n${participants || '[확인 필요]'}\n\n## 목표\n(회의 목표를 한 줄로 요약)\n\n## 자료\n(회의에서 언급된 링크나 자료. 없으면 -)\n\n## 토론 주제\n| 시간 | 토픽 | 발표자 | 비고 |\n|------|------|--------|------|\n(각 토론 주제별로 한 행씩. 비고에 주요 내용, 질답, 결정사항 상세 기록)\n\n## 조치 항목\n| 담당자 | 내용 | 기한 |\n|--------|------|------|\n\n## 결정 사항\n(최종 결정된 내용)\n\n## 관련 정보\n(참고 링크, 문서 등. 없으면 -)\n\n불명확한 부분은 [확인 필요]로 표시해주세요.` }],
+    messages: [{ role: 'user', content: `다음은 오늘(${today}) ${meetingType.name} 내용입니다.\n참여자: ${participants}\n\n[회의 내용]\n${transcript}\n\n위 내용을 바탕으로 아래 형식에 맞게 회의록을 작성해주세요. 형식을 절대 변경하지 마세요.\n\n# ${todayTitle} 회의록\n\n## 날짜\n${today}\n\n## 참여자\n${participants || '[확인 필요]'}\n\n## 목표\n(회의 목표를 한 줄로 요약)\n\n## 자료\n(회의에서 언급된 링크나 자료. 없으면 -)\n\n## 토론 주제\n(각 토픽별로 아래 형식으로 작성)\n\n### [토픽 제목]\n- **발표자**: 이름\n- **내용**: 주요 내용, 질답, 결정사항 상세 기록\n\n## 조치 항목\n| 담당자 | 내용 | 기한 |\n|--------|------|------|\n\n## 결정 사항\n(최종 결정된 내용)\n\n## 관련 정보\n(참고 링크, 문서 등. 없으면 -)\n\n불명확한 부분은 [확인 필요]로 표시해주세요.` }],
   });
   return { minutes: res.content[0].text, todayTitle };
 }
